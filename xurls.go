@@ -6,7 +6,9 @@ package xurls // import "mvdan.cc/xurls"
 
 import (
 	"bytes"
+	"net/url"
 	"regexp"
+	"strings"
 )
 
 //go:generate go run generate/tldsgen/main.go
@@ -100,4 +102,28 @@ func StrictMatchingScheme(exp string) (*regexp.Regexp, error) {
 	}
 	re.Longest()
 	return re, nil
+}
+
+// ExtractSubdomains finds all subdomains from a given text
+func ExtractSubdomains(text, domain string) (urls []string) {
+	allUrls := Relaxed().FindAllString(text, -1)
+
+	for i, u := range allUrls {
+		allUrls[i] = handleURI(u)
+	}
+
+	return allUrls
+}
+
+func handleURI(u string) string {
+	// Try to parse as normal URI
+	if u, err := url.ParseRequestURI(u); err == nil {
+		return u.Host
+	}
+
+	replacer := strings.NewReplacer(
+		"3A", "",
+	)
+	// Suppress bad chars
+	return replacer.Replace(u)
 }
