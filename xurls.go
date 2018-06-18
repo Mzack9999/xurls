@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 //go:generate go run generate/tldsgen/main.go
@@ -53,6 +54,16 @@ var SchemesNoAuthority = []string{
 	`sms`,     // SMS
 	`tel`,     // Telephone
 	`xmpp`,    // XMPP
+}
+
+var instance *regexp.Regexp
+var once sync.Once
+
+func getInstance() *regexp.Regexp {
+	once.Do(func() {
+		instance = Relaxed()
+	})
+	return instance
 }
 
 func anyOf(strs ...string) string {
@@ -106,7 +117,7 @@ func StrictMatchingScheme(exp string) (*regexp.Regexp, error) {
 
 // ExtractSubdomains finds all subdomains from a given text
 func ExtractSubdomains(text, domain string) (urls []string) {
-	allUrls := Relaxed().FindAllString(text, -1)
+	allUrls := getInstance().FindAllString(text, -1)
 
 	for i, u := range allUrls {
 		allUrls[i] = handleURI(u)
