@@ -139,6 +139,7 @@ func handleURI(u string) []string {
 	replacer := strings.NewReplacer(
 		"3A", "",
 		"/", " ",
+		"\"", " ",
 	)
 
 	// Suppress bad chars
