@@ -118,23 +118,32 @@ func StrictMatchingScheme(exp string) (*regexp.Regexp, error) {
 // ExtractSubdomains finds all subdomains from a given text
 func ExtractSubdomains(text, domain string) (urls []string) {
 	allUrls := getInstance().FindAllString(text, -1)
+	var finalUrls []string
 
-	for i, u := range allUrls {
-		allUrls[i] = handleURI(u)
+	for _, u := range allUrls {
+		finalUrls = append(finalUrls, handleURI(u)...)
 	}
 
-	return allUrls
+	return finalUrls
 }
 
-func handleURI(u string) string {
+func handleURI(u string) []string {
+	var urls []string
 	// Try to parse as normal URI
 	if u, err := url.ParseRequestURI(u); err == nil {
-		return u.Host
+		urls = append(urls, u.Host)
+		return urls
+
 	}
 
 	replacer := strings.NewReplacer(
 		"3A", "",
+		"/", " ",
 	)
+
 	// Suppress bad chars
-	return replacer.Replace(u)
+	u = replacer.Replace(u)
+
+	// Split on spaces
+	return strings.Split(u, " ")
 }
