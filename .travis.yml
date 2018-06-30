@@ -1,7 +1,0 @@
-language: go
-
-go_import_path: github.com/Mzack9999/xurls
-
-go:
-  - 1.9.x
-  - 1.10.x
