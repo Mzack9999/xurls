@@ -1,130 +1,64 @@
-// Copyright (c) 2015, Daniel Martí <mvdan@mvdan.cc>
-// See LICENSE for licensing information
-
 // Package xurls extracts urls from plain text using regular expressions.
 package xurls
 
 import (
-	"bytes"
+	"html"
 	"net/url"
-	"regexp"
 	"strings"
-	"sync"
+	"unicode"
 )
-
-//go:generate go run generate/tldsgen/main.go
-//go:generate go run generate/schemesgen/main.go
-
-const (
-	letter    = `\p{L}`
-	mark      = `\p{M}`
-	number    = `\p{N}`
-	iriChar   = letter + mark + number
-	currency  = `\p{Sc}`
-	otherSymb = `\p{So}`
-	endChar   = iriChar + `/\-+_&~*%=#` + currency + otherSymb
-	otherPunc = `\p{Po}`
-	midChar   = endChar + `|` + otherPunc
-	wellParen = `\([` + midChar + `]*(\([` + midChar + `]*\)[` + midChar + `]*)*\)`
-	wellBrack = `\[[` + midChar + `]*(\[[` + midChar + `]*\][` + midChar + `]*)*\]`
-	wellBrace = `\{[` + midChar + `]*(\{[` + midChar + `]*\}[` + midChar + `]*)*\}`
-	wellAll   = wellParen + `|` + wellBrack + `|` + wellBrace
-	pathCont  = `([` + midChar + `]*(` + wellAll + `|[` + endChar + `])+)+`
-
-	iri      = `[` + iriChar + `]([` + iriChar + `\-]*[` + iriChar + `])?`
-	domain   = `(` + iri + `\.)+`
-	octet    = `(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])`
-	ipv4Addr = `\b` + octet + `\.` + octet + `\.` + octet + `\.` + octet + `\b`
-	ipv6Addr = `([0-9a-fA-F]{1,4}:([0-9a-fA-F]{1,4}:([0-9a-fA-F]{1,4}:([0-9a-fA-F]{1,4}:([0-9a-fA-F]{1,4}:[0-9a-fA-F]{0,4}|:[0-9a-fA-F]{1,4})?|(:[0-9a-fA-F]{1,4}){0,2})|(:[0-9a-fA-F]{1,4}){0,3})|(:[0-9a-fA-F]{1,4}){0,4})|:(:[0-9a-fA-F]{1,4}){0,5})((:[0-9a-fA-F]{1,4}){2}|:(25[0-5]|(2[0-4]|1[0-9]|[1-9])?[0-9])(\.(25[0-5]|(2[0-4]|1[0-9]|[1-9])?[0-9])){3})|(([0-9a-fA-F]{1,4}:){1,6}|:):[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){7}:`
-	ipAddr   = `(` + ipv4Addr + `|` + ipv6Addr + `)`
-	port     = `(:[0-9]*)?`
-)
-
-// AnyScheme can be passed to StrictMatchingScheme to match any possibly
-// valid scheme.
-var AnyScheme = `([a-zA-Z][a-zA-Z.\-+]*://|` + anyOf(SchemesNoAuthority...) + `:)`
-
-// SchemesNoAuthority is a sorted list of some well-known url schemes that are
-// followed by ":" instead of "://".
-var SchemesNoAuthority = []string{
-	`bitcoin`, // Bitcoin
-	`file`,    // Files
-	`magnet`,  // Torrent magnets
-	`mailto`,  // Mail
-	`sms`,     // SMS
-	`tel`,     // Telephone
-	`xmpp`,    // XMPP
-}
-
-var instance *regexp.Regexp
-var once sync.Once
-
-func getInstance() *regexp.Regexp {
-	once.Do(func() {
-		instance = Relaxed()
-	})
-	return instance
-}
-
-func anyOf(strs ...string) string {
-	var b bytes.Buffer
-	b.WriteByte('(')
-	for i, s := range strs {
-		if i != 0 {
-			b.WriteByte('|')
-		}
-		b.WriteString(regexp.QuoteMeta(s))
-	}
-	b.WriteByte(')')
-	return b.String()
-}
-
-func strictExp() string {
-	schemes := `(` + anyOf(Schemes...) + `://|` + anyOf(SchemesNoAuthority...) + `:)`
-	return `(?i)` + schemes + `(?-i)` + pathCont
-}
-
-func relaxedExp() string {
-	site := domain + `(?i)` + anyOf(append(TLDs, PseudoTLDs...)...) + `(?-i)`
-	hostName := `(` + site + `|` + ipAddr + `)`
-	webURL := hostName + port + `(/|/` + pathCont + `?|\b|$)`
-	return strictExp() + `|` + webURL
-}
-
-func Relaxed() *regexp.Regexp {
-	re := regexp.MustCompile(relaxedExp())
-	re.Longest()
-	return re
-}
-
-func Strict() *regexp.Regexp {
-	re := regexp.MustCompile(strictExp())
-	re.Longest()
-	return re
-}
-
-// StrictMatchingScheme produces a regexp that matches urls like Strict but
-// whose scheme matches the given regular expression.
-func StrictMatchingScheme(exp string) (*regexp.Regexp, error) {
-	strictMatching := `(?i)(` + exp + `)(?-i)` + pathCont
-	re, err := regexp.Compile(strictMatching)
-	if err != nil {
-		return nil, err
-	}
-	re.Longest()
-	return re, nil
-}
 
 // ExtractSubdomains finds all subdomains from a given text
 func ExtractSubdomains(text, domain string) (urls []string) {
-	allUrls := getInstance().FindAllString(text, -1)
+	allUrls := findAllUrls(text)
 	var finalUrls []string
 
 	for _, u := range allUrls {
 		finalUrls = append(finalUrls, handleURI(u)...)
 	}
 
+	// Filter by domains and remove duplicates
+	finalUrls = filterByDomain(finalUrls, domain)
+
 	return finalUrls
+}
+
+func findAllUrls(text string) (urls []string) {
+	for i, r := range text {
+		if r == '.' {
+			bck := string(r)
+			//Go back till first valid ascii or number
+			for backIndex := i - 1; backIndex >= 0; backIndex-- {
+				rr := rune(text[backIndex])
+				if isValidRuneBack(rr) {
+					bck = string(rr) + bck
+				} else {
+					break
+				}
+			}
+
+			//Go forth till the last valid ascii or number
+			for forwardIndex := i + 1; forwardIndex < len(text); forwardIndex++ {
+				rr := rune(text[forwardIndex])
+				if isValidRuneForward(rr) {
+					bck = bck + string(rr)
+				} else {
+					break
+				}
+			}
+			urls = append(urls, bck)
+		}
+	}
+
+	return urls
+}
+
+func isValidRuneBack(r rune) bool {
+	return unicode.IsNumber(r) || unicode.IsLetter(r) || r == ':' || r == '/' || r == '_' || r == '-' || r == '%'
+}
+
+func isValidRuneForward(r rune) bool {
+	return isValidRuneBack(r) || r == '.'
 }
 
 func handleURI(u string) []string {
@@ -136,15 +70,56 @@ func handleURI(u string) []string {
 
 	}
 
+	// Html Unescape
+	u = html.UnescapeString(u)
+
+	// Query Unescape
+	u, _ = url.QueryUnescape(u)
+
 	replacer := strings.NewReplacer(
-		"3A", "",
+		"u003d", " ",
 		"/", " ",
-		"\"", " ",
+		"\\", " ",
 	)
 
 	// Suppress bad chars
 	u = replacer.Replace(u)
 
+	// Suppress bad starting characters
+	u = suppressLeftChar(u)
+
 	// Split on spaces
 	return strings.Split(u, " ")
+}
+
+func suppressLeftChar(s string) string {
+	if strings.HasPrefix(s, "-www") {
+		return s[1:]
+	}
+
+	if strings.HasPrefix(s, "-site") {
+		return s[5:]
+	}
+
+	for i, r := range s {
+		if r == '/' {
+			return s[i:]
+		}
+	}
+
+	return s
+}
+
+func filterByDomain(urls []string, domain string) []string {
+	result := []string{}
+	seen := map[string]string{}
+	for _, u := range urls {
+		if strings.HasSuffix(u, domain) {
+			if _, ok := seen[u]; !ok {
+				result = append(result, u)
+				seen[u] = u
+			}
+		}
+	}
+	return result
 }
